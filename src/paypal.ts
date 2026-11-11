@@ -49,7 +49,7 @@ export type InvoiceInfo = { id: string; number: string; status: string; payUrl: 
 const mockInvoices = new Map<string, InvoiceInfo>();
 
 export async function createAndSendInvoice(o: {
-  recipientEmail: string; recipientName: string; amount: number; currency: string; itemName: string; note: string;
+  recipientEmail: string; recipientName: string; currency: string; note: string; items: { name: string; amount: number }[];
 }): Promise<InvoiceInfo> {
   if (MOCK) {
     const id = 'INV2-MOCK-' + randomUUID().slice(0, 8).toUpperCase();
@@ -72,7 +72,7 @@ export async function createAndSendInvoice(o: {
     primary_recipients: [{
       billing_info: { name: { given_name, surname: rest.join(' ') || '-' }, email_address: o.recipientEmail },
     }],
-    items: [{ name: o.itemName, quantity: '1', unit_amount: { currency_code: o.currency, value: money(o.amount) } }],
+    items: o.items.map((i) => ({ name: i.name, quantity: '1', unit_amount: { currency_code: o.currency, value: money(i.amount) } })),
   });
   const id: string = created.id || lastSegment(created.href);
   await pp('POST', `/v2/invoicing/invoices/${id}/send`, { send_to_recipient: true, send_to_invoicer: false });
@@ -117,18 +117,18 @@ export function mockPayInvoice(id: string): boolean {
 export type PayoutInfo = { batchId: string; status: string };
 
 export async function createPayout(o: {
-  email: string; amount: number; currency: string; note: string; subject: string; idempotencyKey: string;
+  currency: string; note: string; subject: string; idempotencyKey: string; items: { email: string; amount: number }[];
 }): Promise<PayoutInfo> {
   if (MOCK) return { batchId: 'MOCKBATCH' + randomUUID().slice(0, 8).toUpperCase(), status: 'SUCCESS' };
   const r = await pp('POST', '/v1/payments/payouts', {
     sender_batch_header: { sender_batch_id: o.idempotencyKey, email_subject: o.subject, email_message: o.note },
-    items: [{
+    items: o.items.map((i, n) => ({
       recipient_type: 'EMAIL',
-      receiver: o.email,
-      amount: { value: money(o.amount), currency: o.currency },
+      receiver: i.email,
+      amount: { value: money(i.amount), currency: o.currency },
       note: o.note,
-      sender_item_id: o.idempotencyKey,
-    }],
+      sender_item_id: `${o.idempotencyKey}-${n + 1}`,
+    })),
   });
   return { batchId: r.batch_header.payout_batch_id, status: r.batch_header.batch_status };
 }

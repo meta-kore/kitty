@@ -31,9 +31,26 @@ Kitty is an AI treasurer for savings circles, built for the PayPal AI Hackathon 
 6. "Record cash" for one member; pay the rest. Ask Kitty again; expect only a payout proposal.
 7. Approve the payout. Expect a batch id and, after "Refresh payout status", SUCCESS. Check the recipient's sandbox balance.
 
-## Known unknowns (not yet verified against the real sandbox)
+## Table banking (second group type)
 
-- Exact Invoicing v2 request shapes in `src/paypal.ts` (create, send, remind, record payment).
-- Whether the invoice `recipient_view_url` is returned straight after sending.
-- Payouts permission on the sandbox app.
-- Prompt quality with the chosen model (see `TREASURER` and the planning prompt in `src/server.ts`).
+Chosen on the setup form (`type: 'table'`). Meetings reuse the cycle records; loans and the share-out live on the circle. The fund is derived from paid invoices and loan states (`fund` in `src/server.ts`), never stored. Rules are constants and checks in code (`loanBlock`, `shareOutBlock`): 10% flat interest repaid at the next meeting, limit of three times own savings and never more than the fund's cash, one loan per member, no share-out with a loan outstanding or before `termMeetings`.
+
+Sandbox test, with 4 members, savings 10, 2 meetings before share-out:
+
+1. Start meeting 1; pay or record cash for all four. Fund shows 40.
+2. Add a loan request of 20 for one member and one of 50 for another. Ask Kitty: expect "approve" for the 20 and "decline" for the 50.
+3. Approve the 20. Expect a payout batch id, and the fund at 20 with 20 out on loan.
+4. Start meeting 2. The borrower's invoice should be 32 with two lines; the others 10.
+5. Pay all four. Fund shows 82 with 2 interest. Ask Kitty: expect only the share-out.
+6. Approve the share-out. Expect one batch with four items of 20.50 and, after refresh, SUCCESS.
+
+## Verified against the real sandbox (11 Nov 2026)
+
+- Rotating pot, three full cycles: invoice create, send, remind and record payment; `recipient_view_url` returned straight after sending; Payouts; prompt quality with `openai/gpt-oss-120b` on Groq.
+
+- Table banking, one full two-meeting term: a loan payout, an invoice with two line items paid through PayPal, and a share-out batch with four items.
+
+## Not yet verified against the real sandbox
+
+- The denied-payout retry paths (pot, loan and share-out).
+- Recording a cash payment on a two-line invoice, and sending a reminder for one.

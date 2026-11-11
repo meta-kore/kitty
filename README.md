@@ -17,6 +17,21 @@ Built for the PayPal AI Hackathon 2026.
 5. **Answers questions**: "Who still owes this cycle?" "Who has been most reliable?"
 6. **Reports**: after each payout the AI writes a short summary for the group chat.
 
+## Two kinds of group
+
+Kitty runs either model; you choose when you create the group.
+
+**Rotating pot** (the flow above): everyone pays in each cycle and one member takes the whole pot, in turn.
+
+**Table banking**: the group keeps a fund instead of handing over a pot.
+
+1. **Save**: at each meeting, every member gets a PayPal invoice for the same savings amount. Paid savings build the fund.
+2. **Borrow**: a member can ask for a loan from the fund. The AI recommends approving or declining, with reasons based on the rules, the fund and the borrower's history. The treasurer decides, and PayPal Payouts sends the loan.
+3. **Repay**: the borrower's next invoice carries their savings plus the loan and its interest as a second line.
+4. **Share out**: at the end of the term, one PayPal payout batch returns each member's savings plus their share of the interest earned.
+
+The rules are fixed in code: 10% flat interest, repaid in full at the next meeting; a loan limit of three times the borrower's own savings and never more than the cash in the fund; one loan per member at a time; no share-out while a loan is outstanding. The server enforces them whatever the AI recommends.
+
 ## How PayPal is used
 
 | PayPal API | Used for |
@@ -25,14 +40,14 @@ Built for the PayPal AI Hackathon 2026.
 | Invoicing v2: get | Payment status for the dashboard and the AI |
 | Invoicing v2: remind | Delivering the AI-written, treasurer-approved reminder |
 | Invoicing v2: record payment | Members who paid the treasurer in cash, so the books stay in one place |
-| Payouts | Sending the pot to the cycle's recipient |
+| Payouts | Sending the pot to the cycle's recipient; in table banking, sending loans and the share-out batch |
 
 All calls go to the PayPal **sandbox**. The code cannot point at live PayPal.
 
 ## How AI is used
 
 - **Planning agent** (`POST /api/agent/run`): reads the circle's state and returns a structured plan of proposed actions (reminders with tone, subject, message and reasoning; or the payout).
-- **Guardrails in code, not in the prompt**: the server discards any proposed reminder for a member who has paid, and any payout proposed before every member has paid. The AI never moves money by itself: every action needs the treasurer's click.
+- **Guardrails in code, not in the prompt**: the server discards any proposed reminder for a member who has paid, and any payout proposed before every member has paid. In table banking it turns an "approve" for a loan that breaks the rules into a "decline", and drops a share-out proposed too early. The AI never moves money by itself: every action needs the treasurer's click.
 - **Question answering** and **cycle summaries** over the circle's data.
 
 Works with Claude (Anthropic), Groq, Gemini or OpenRouter: set `AI_PROVIDER`, `AI_API_KEY` and optionally `AI_MODEL`.
@@ -77,6 +92,7 @@ public/         Single-page dashboard
 ## Limitations
 
 - One circle per deployment, stored in a local JSON file; no member logins.
+- Table banking is a minimal version: no fines, social fund or instalment loans, and a term ends at the share-out.
 - PayPal fees on received invoice payments are not netted out of the pot.
 - Reminders reach members by PayPal email only.
 - `PAYPAL_MOCK=1` runs the app without PayPal for offline development. It is not used in the demo.

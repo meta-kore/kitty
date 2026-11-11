@@ -25,7 +25,7 @@
   button.ai { background:var(--ai); color:#fff; border-color:var(--ai); font-weight:600; }
   button.small { padding:4px 10px; font-size:13px; }
   button:disabled { opacity:.5; cursor:wait; }
-  input, textarea { font:inherit; width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:9px; background:#fff; color:var(--ink); }
+  input, textarea, select { font:inherit; width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:9px; background:#fff; color:var(--ink); }
   label { font-size:13px; color:var(--muted); display:block; margin:8px 0 3px; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   .row > * { flex:1; min-width:140px; }
@@ -103,6 +103,11 @@ function viewSetup() {
   <div class="card"><h2>Create a circle</h2>
     <div class="row"><div><label>Circle name</label><input id="c-name" value="Sunday Savers"></div>
       <div><label>Contribution per member, per cycle (USD)</label><input id="c-amt" type="number" min="1" value="100"></div></div>
+    <div class="row"><div><label>Group type</label><select id="c-type">
+        <option value="rosca">Rotating pot: one member takes the whole pot each cycle</option>
+        <option value="table">Table banking: members save, borrow from the fund, then share it out</option></select></div>
+      <div><label>Table banking only: meetings before the share-out</label><input id="c-term" type="number" min="1" value="3"></div></div>
+    <p class="muted">In table banking, members can borrow up to three times their savings at 10% interest, repaid at the next meeting. The interest is shared out with the savings at the end.</p>
     <label>Members, in payout order (use the email addresses of your PayPal sandbox personal accounts)</label>
     <div id="members">${rows}</div>
     <p class="muted">The demo members come with a payment history, so you can see the AI adjust its tone.</p>
@@ -110,7 +115,83 @@ function viewSetup() {
   </div>`;
 }
 
+function askCard() {
+  return `<div class="card"><h2>Ask Kitty</h2>
+      <div class="row"><input id="q" placeholder="Who still owes? Who has been most reliable?" onkeydown="if(event.key==='Enter')ask($('#askb'))" style="flex:4"><button id="askb" class="ai" style="flex:none" onclick="ask(this)">Ask</button></div>
+      <div class="answer" id="answer" style="display:${answer ? 'block' : 'none'}">${esc(answer)}</div></div>`;
+}
+function resetLine() {
+  return `<p class="muted"><a href="#" onclick="if(confirm('Delete this group and start again?'))run(null, async () => { await api('DELETE','/api/circle'); plan = null; answer = ''; });return false">Reset demo</a> &middot; AI: ${esc(S.ai.provider)} / ${esc(S.ai.model)}</p>`;
+}
+const payChip = (s) => `<div class="muted">PayPal payout ${esc(s)}</div>`;
+
+// Table banking: members save each meeting, borrow from the fund, and share it out at the end.
+function viewTable() {
+  const c = S.circle, T = S.table, cy = c.cycles[c.cycles.length - 1], loans = c.loans || [];
+  let top;
+  if (c.shareOut) {
+    const so = c.shareOut;
+    top = `<div class="card"><h2>${esc(c.name)}: fund shared out</h2>
+      <div class="big">${fmt(so.total)} <span class="chip ok">PayPal payout ${esc(so.status)}</span></div>
+      <div class="muted">Batch ${esc(so.batchId)} &middot; ${fmt(T.fund.savings)} in savings plus ${fmt(T.fund.interest)} interest earned from loans</div>
+      <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Member</th><th>Saved</th><th>Received</th></tr></thead><tbody>
+      ${so.items.map((i) => `<tr><td><b>${esc(member(i.memberId).name)}</b></td><td>${fmt(T.savings[i.memberId] || 0)}</td><td>${fmt(i.amount)}</td></tr>`).join('')}</tbody></table></div>
+      <div class="summary" style="margin-top:10px">${esc(so.summary || '')}</div>
+      <div style="height:10px"></div><button class="small" onclick="run(this, () => api('POST','/api/payout/refresh'))">Refresh payout status</button></div>`;
+  } else if (!cy) {
+    top = `<div class="card"><h2>${esc(c.name)}</h2>
+      <p>${c.members.length} members, each saving ${fmt(c.contribution)} per meeting. Members can borrow up to three times their savings at 10% interest, repaid at the next meeting.</p>
+      <p>The fund is shared out after meeting ${c.termMeetings}.</p>
+      <button class="primary" onclick="run(this, () => api('POST','/api/cycles/start'))">Start meeting 1 and send PayPal invoices</button></div>`;
+  } else {
+    const paid = cy.contributions.filter((x) => x.status !== 'SENT').length;
+    const allIn = cy.contributions.length === c.members.length && paid === c.members.length;
+    const rows = cy.contributions.map((x) => { const m = member(x.memberId); const done = x.status !== 'SENT'; return `<tr>
+      <td><b>${esc(m.name)}</b><div class="muted">${fmt(T.savings[m.id] || 0)} saved &middot; ${m.onTime} on time, ${m.late} late</div></td>
+      <td>${done ? `<span class="chip ok">${x.status === 'CASH' ? 'Paid in cash' : 'Paid via PayPal'}</span>` : `<span class="chip warn">Unpaid</span>${x.reminders.length ? `<div class="muted">${x.reminders.length} reminder${x.reminders.length > 1 ? 's' : ''} sent</div>` : ''}`}</td>
+      <td>${x.payUrl ? `<a href="${esc(x.payUrl)}" target="_blank" rel="noopener">Invoice ${esc(x.number)}</a>` : esc(x.number)}<div class="muted">${fmt(x.amount ?? c.contribution)}${x.loanId ? ', with loan repayment' : ''}</div></td>
+      <td>${done ? '' : `<button class="small" onclick="run(this, () => api('POST','/api/cycles/cash/${x.memberId}'))">Record cash</button>`}</td></tr>`; }).join('');
+    top = `<div class="grid2">
+      <div class="card"><div class="row tight" style="justify-content:space-between"><h2 style="margin:0">${esc(c.name)}: meeting ${cy.n}</h2>
+        <button class="small" onclick="run(this, () => api('POST','/api/cycles/sync'))">Refresh from PayPal</button></div>
+        <div class="tablewrap"><table><thead><tr><th>Member</th><th>Status</th><th>PayPal invoice</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+        ${cy.contributions.length < c.members.length ? `<p class="muted" style="color:var(--warn)">Only ${cy.contributions.length} of ${c.members.length} invoices were sent.</p>
+        <button class="primary small" onclick="run(this, () => api('POST','/api/cycles/start'))">Send the remaining invoices</button>` : ''}
+        ${allIn ? `<div class="row tight" style="margin-top:12px"><button class="primary small" onclick="run(this, async () => { await api('POST','/api/cycles/start'); plan = null; })">Start meeting ${cy.n + 1} and send PayPal invoices</button>
+          ${T.shareOutBlocked ? '' : `<button class="small" onclick="shareOut(this)">Share out the fund via PayPal</button>`}</div>
+          ${T.shareOutBlocked ? `<p class="muted" style="margin-bottom:0">Share-out not yet possible: ${esc(T.shareOutBlocked)}</p>` : ''}` : ''}</div>
+      <div class="card"><div class="muted">Fund available to lend</div>
+        <div class="big">${fmt(T.fund.cash)}</div>
+        <div class="muted">${fmt(T.fund.savings)} saved &middot; ${fmt(T.fund.interest)} interest earned &middot; ${fmt(T.fund.outstanding)} out on loan</div>
+        <div class="bar"><i style="width:${(paid / c.members.length) * 100}%"></i></div>
+        <div class="muted">${paid} of ${c.members.length} members have paid this meeting</div>
+        <div style="height:14px"></div>
+        <button class="ai" style="width:100%" onclick="runAgent(this)">Ask Kitty what to do next</button>
+        <div id="plan">${viewPlan()}</div></div>
+    </div>`;
+  }
+  const status = (l) => l.status === 'requested' ? `<span class="chip warn">Requested</span>${T.loanBlocks[l.id] ? `<div class="muted">${esc(T.loanBlocks[l.id])}</div>` : ''}`
+    : l.status === 'active' ? `<span class="chip warn">Out on loan</span>${payChip(l.payout?.status)}`
+    : l.status === 'repaid' ? `<span class="chip ok">Repaid with interest</span>`
+    : `<span class="muted">Declined</span><div class="muted">${esc(l.declineReason || '')}</div>`;
+  const loanRows = loans.slice().reverse().map((l) => `<tr>
+      <td><b>${esc(member(l.memberId).name)}</b><div class="muted">${esc(l.purpose)}</div></td>
+      <td>${fmt(l.amount)}<div class="muted">plus ${fmt(l.interest)} interest</div></td>
+      <td>${status(l)}</td>
+      <td>${l.status === 'requested' ? `<div class="row tight">${T.loanBlocks[l.id] ? '' : `<button class="primary small" onclick="approveLoan(this,'${l.id}')">Approve and pay out</button>`}<button class="small" onclick="declineLoan(this,'${l.id}','')">Decline</button></div>` : ''}</td></tr>`).join('');
+  const loansCard = `<div class="card"><div class="row tight" style="justify-content:space-between"><h2 style="margin:0">Loans</h2>
+      <button class="small" onclick="run(this, () => api('POST','/api/payout/refresh'))">Refresh payout status</button></div>
+      ${loanRows ? `<div class="tablewrap"><table><thead><tr><th>Borrower</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>${loanRows}</tbody></table></div>` : '<p class="muted">No loans yet.</p>'}
+      ${cy && !c.shareOut ? `<label>Record a member's loan request</label>
+      <div class="row"><select id="l-member">${c.members.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select>
+        <input id="l-amt" type="number" min="1" placeholder="Amount">
+        <input id="l-purpose" placeholder="What is it for?" style="flex:2">
+        <button style="flex:none" onclick="requestLoan(this)">Add request</button></div>` : ''}</div>`;
+  return top + loansCard + askCard() + resetLine();
+}
+
 function viewCircle() {
+  if (S.circle.type === 'table') return viewTable();
   const c = S.circle, cy = c.cycles[c.cycles.length - 1];
   const collecting = cy && cy.status === 'collecting';
   const pot = c.contribution * c.members.length;
@@ -147,14 +228,10 @@ function viewCircle() {
   const history = c.cycles.filter((x) => x.status === 'paid_out').reverse().map((x) => `<div style="padding:10px 0;border-top:1px solid var(--line)">
       <b>Cycle ${x.n}</b>: ${fmt(x.payout.amount)} paid to ${esc(member(x.recipientId).name)} <span class="chip ok">PayPal payout ${esc(x.payout.status)}</span>
       <div class="muted">Batch ${esc(x.payout.batchId)}</div><div class="summary">${esc(x.summary || '')}</div></div>`).join('');
-  return top + `
-    <div class="card"><h2>Ask Kitty</h2>
-      <div class="row"><input id="q" placeholder="Who still owes this cycle? Who has been most reliable?" onkeydown="if(event.key==='Enter')ask($('#askb'))" style="flex:4"><button id="askb" class="ai" style="flex:none" onclick="ask(this)">Ask</button></div>
-      <div class="answer" id="answer" style="display:${answer ? 'block' : 'none'}">${esc(answer)}</div></div>
+  return top + askCard() + `
     <div class="card"><div class="row tight" style="justify-content:space-between"><h2 style="margin:0">Payout history</h2>
       <button class="small" onclick="run(this, () => api('POST','/api/payout/refresh'))">Refresh payout status</button></div>
-      ${history || '<p class="muted">No pots paid out yet.</p>'}</div>
-    <p class="muted"><a href="#" onclick="if(confirm('Delete this circle and start again?'))run(null, () => api('DELETE','/api/circle'));return false">Reset demo</a> &middot; AI: ${esc(S.ai.provider)} / ${esc(S.ai.model)}</p>`;
+      ${history || '<p class="muted">No pots paid out yet.</p>'}</div>` + resetLine();
 }
 
 function viewPlan() {
@@ -163,14 +240,34 @@ function viewPlan() {
       <div class="muted">${esc(a.reason)}</div>
       <input id="sub${i}" value="${esc(a.subject)}" aria-label="Subject" style="margin-top:6px"><textarea id="note${i}" aria-label="Message">${esc(a.note)}</textarea>
       <div class="row tight" style="margin-top:8px"><button class="primary small" onclick="approveRemind(this, ${i})">Approve and send via PayPal</button><button class="small" onclick="dismiss(${i})">Dismiss</button></div></div>`
+    : a.type === 'loan_decision' ? loanAction(a, i)
+    : a.type === 'share_out' ? `<div class="action"><h3>Share out the fund</h3><div class="muted">${esc(a.reason)}</div>
+      <div class="row tight" style="margin-top:8px"><button class="primary small" onclick="shareOut(this)">Approve PayPal share-out</button><button class="small" onclick="dismiss(${i})">Dismiss</button></div></div>`
     : `<div class="action"><h3>Pay out the pot</h3><div class="muted">${esc(a.reason)}</div>
       <div class="row tight" style="margin-top:8px"><button class="primary small" onclick="approvePayout(this)">Approve PayPal payout</button><button class="small" onclick="dismiss(${i})">Dismiss</button></div></div>`).join('');
   return `<p style="margin:12px 0 0">${esc(plan.briefing)}</p>${acts || '<p class="muted">Nothing to do right now.</p>'}`;
 }
 
+function loanAction(a, i) {
+  const l = (S.circle.loans || []).find((l) => l.id === a.loanId && l.status === 'requested');
+  if (!l) return '';
+  const yes = a.decision === 'approve';
+  return `<div class="action"><h3>Loan request: ${esc(member(l.memberId).name)}, ${fmt(l.amount)} <span class="chip ${yes ? 'ok' : 'warn'}">Kitty says ${yes ? 'approve' : 'decline'}</span></h3>
+      <div class="muted">${esc(a.reason)}</div>
+      <div class="row tight" style="margin-top:8px">${yes ? `<button class="primary small" onclick="approveLoan(this,'${l.id}')">Approve and pay out via PayPal</button>` : ''}
+      <button class="small" onclick="declineLoan(this,'${l.id}', plan.actions[${i}].reason)">Decline loan</button><button class="small" onclick="dismiss(${i})">Dismiss</button></div></div>`;
+}
+const dropLoan = (id) => { if (plan) plan.actions = plan.actions.filter((a) => !(a.type === 'loan_decision' && a.loanId === id)); if (plan && !plan.actions.length) plan = null; };
+async function requestLoan(btn) {
+  const body = { memberId: $('#l-member').value, amount: Number($('#l-amt').value), purpose: $('#l-purpose').value.trim() };
+  await run(btn, () => api('POST', '/api/loans', body));
+}
+async function approveLoan(btn, id) { await run(btn, async () => { await api('POST', `/api/loans/${id}/approve`); dropLoan(id); }); }
+async function declineLoan(btn, id, reason) { await run(btn, async () => { await api('POST', `/api/loans/${id}/decline`, { reason }); dropLoan(id); }); }
+async function shareOut(btn) { await run(btn, async () => { await api('POST', '/api/shareout'); plan = null; }); }
 async function createCircle(btn) {
   const members = [...document.querySelectorAll('#members .row')].map((r) => ({ name: $('.m-name', r).value.trim(), email: $('.m-email', r).value.trim(), onTime: $('.m-on', r).value, late: $('.m-late', r).value })).filter((m) => m.name || m.email);
-  await run(btn, () => api('POST', '/api/circle', { name: $('#c-name').value.trim(), contribution: Number($('#c-amt').value), members }));
+  await run(btn, () => api('POST', '/api/circle', { name: $('#c-name').value.trim(), contribution: Number($('#c-amt').value), type: $('#c-type').value, termMeetings: Number($('#c-term').value), members }));
 }
 async function runAgent(btn) { await run(btn, async () => { plan = null; plan = await api('POST', '/api/agent/run'); }); }
 async function approveRemind(btn, i) { const a = plan.actions[i]; await run(btn, async () => { await api('POST', '/api/actions/remind', { memberId: a.memberId, subject: $('#sub' + i).value, note: $('#note' + i).value }); plan.actions.splice(i, 1); }); }
