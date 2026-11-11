@@ -83,7 +83,23 @@ public/         Single-page dashboard
 
 ## AI tools used
 
-See the Devpost submission for the full statement of AI tools and models used to build and run this project.
+### In the running app
+
+Kitty calls a large language model for three jobs, all in `src/server.ts`:
+
+| Job | What the model does |
+|---|---|
+| Planning (`POST /api/agent/run`) | Reads the circle's state and proposes reminders (tone, subject, message, reasoning) or the payout, as JSON |
+| Questions (`POST /api/ask`) | Answers the treasurer's questions from the circle's data only |
+| Cycle summary | Writes a short group-chat summary after each payout |
+
+The model is chosen in `.env` and reached through one small client, `src/ai.ts`. It supports Anthropic (Claude), Groq, Gemini and OpenRouter. The end-to-end sandbox test and the demo used **`openai/gpt-oss-120b` hosted on Groq**.
+
+The model never moves money. It only returns proposals; the server checks each one against PayPal's data, and every reminder and payout needs the treasurer's click.
+
+### In development
+
+- **Claude Code** (Anthropic), running Claude Fable 5.2: used for code review, bug fixes and hardening of the payout guardrails, setup of the PayPal sandbox preflight, and driving the end-to-end sandbox test. Commits it contributed to carry a `Co-Authored-By` line.
 
 ## Licence
 
