@@ -44,11 +44,25 @@ Sandbox test, with 4 members, savings 10, 2 meetings before share-out:
 5. Pay all four. Fund shows 82 with 2 interest. Ask Kitty: expect only the share-out.
 6. Approve the share-out. Expect one batch with four items of 20.50 and, after refresh, SUCCESS.
 
+## Rotation schedule (Bryntum Scheduler, rotating pot only)
+
+- Installed with `npm install @bryntum/scheduler@npm:@bryntum/scheduler-trial` (v7.3.8). Served from `node_modules/@bryntum/scheduler` at `/vendor/bryntum`; no bundler. `public/index.html` loads `scheduler.module.js`, `scheduler.css`, `svalbard-light.css`, `fontawesome/css/fontawesome.css` and `fontawesome/css/solid.css`.
+- Bryntum API names change between versions. Check them against `node_modules/@bryntum/scheduler/scheduler.d.ts` before changing the panel; do not guess.
+- The circle has `startDate`, `cycleDays` (default 30) and `payoutOrder` (member ids). `fillDefaults` in `src/server.ts` fills them for older saved data. The recipient of cycle n is `payoutOrder[(n - 1) % members.length]`, fixed on the cycle when it starts.
+- `PUT /api/circle/order { payoutOrder }` accepts only a permutation of the member ids and refuses to change a position whose cycle has started in the rotation shown.
+- The panel is rebuilt from `/api/state` (`schedule`) after every render, so a rejected drag reverts by itself.
+- The trial lasts 45 days from a browser's first load of the page (start time in local storage, per browser and per origin). After that the panel is empty with a "Trial expired" link.
+- `KITTY_DB=path npm start` uses another data file, for tests that should not touch `data/db.json`.
+
+Drag test: with cycle 1 in progress, drag the cycle 2 "receives the pot" bar to another member's row. Start cycle 2 after cycle 1 is paid out; the invoice note and the payout should name the new recipient.
+
 ## Verified against the real sandbox (11 Nov 2026)
 
 - Rotating pot, three full cycles: invoice create, send, remind and record payment; `recipient_view_url` returned straight after sending; Payouts; prompt quality with `openai/gpt-oss-120b` on Groq.
 
 - Table banking, one full two-meeting term: a loan payout, an invoice with two line items paid through PayPal, and a share-out batch with four items.
+
+- Rotation schedule (12 Nov 2026): cycle 2's turn dragged from Carlos to Priya while cycle 1 was running; cycle 2's invoice notes and its payout (read back from PayPal) both went to Priya.
 
 ## Not yet verified against the real sandbox
 

@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kitty - AI treasurer for savings circles</title>
+<!-- Bryntum Scheduler (trial), served from node_modules by src/server.ts: structural CSS, one theme, and its icon font. -->
+<link rel="stylesheet" href="/vendor/bryntum/scheduler.css">
+<link rel="stylesheet" href="/vendor/bryntum/svalbard-light.css">
+<link rel="stylesheet" href="/vendor/bryntum/fontawesome/css/fontawesome.css">
+<link rel="stylesheet" href="/vendor/bryntum/fontawesome/css/solid.css">
 <style>
   :root { --bg:#f6f4ef; --card:#fff; --ink:#1d2433; --muted:#667085; --line:#e4e0d6; --brand:#0b5fff; --brand-ink:#fff;
           --ok:#12805c; --ok-bg:#e3f5ee; --warn:#a15c00; --warn-bg:#fdf0d8; --bad:#b42318; --ai:#5b3fd6; --ai-bg:#f0ecff; }
@@ -14,7 +19,12 @@
   header h1 { margin:0; font-size:26px; letter-spacing:-.02em; }
   header p { margin:4px 0 0; color:#c5d0e6; max-width:70ch; }
   .pill { display:inline-block; font-size:12px; padding:2px 8px; border-radius:99px; background:#ffffff22; margin-left:8px; vertical-align:middle; }
-  main { padding:20px 16px 60px; display:grid; gap:16px; }
+  main { padding:20px 16px 60px; display:grid; gap:16px; grid-template-columns:minmax(0,1fr); }
+  #app { display:grid; gap:16px; grid-template-columns:minmax(0,1fr); }
+  #sched { width:100%; max-width:100%; overflow:hidden; border:1px solid var(--line); border-radius:10px; }
+  #sched .k-link { cursor:pointer; }
+  .legend { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:10px; font-size:13px; color:var(--muted); }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
   h2 { margin:0 0 10px; font-size:18px; }
   .muted { color:var(--muted); font-size:14px; }
@@ -86,6 +96,16 @@ const member = (id) => S.circle.members.find((m) => m.id === id);
 function render() {
   $('#mode').textContent = S.mock ? 'offline mock' : 'PayPal sandbox';
   $('#app').innerHTML = S.circle ? viewCircle() : viewSetup();
+  window.mountSchedule?.(); // the Bryntum panel, defined in the module script at the end of the page
+}
+const SCHED = { PAID: '#12805c', CASH: '#0e7490', SENT: '#b45309', upcoming: '#98a2b3', pot: '#5b3fd6' };
+function scheduleCard() {
+  if (!S.schedule) return '';
+  const key = (c, t) => `<span><i style="background:${c}"></i>${t}</span>`;
+  return `<div class="card"><h2>Rotation schedule${S.schedule.rotation > 1 ? `: rotation ${S.schedule.rotation}` : ''}</h2>
+    <p class="muted" style="margin-top:0">Who pays and who receives the pot in each ${S.schedule.cycleDays}-day cycle. Drag a future "receives the pot" turn along its row to move it to another cycle, or up or down to give that turn to another member.</p>
+    <div id="sched"></div>
+    <div class="legend">${key(SCHED.PAID, 'Paid via PayPal')}${key(SCHED.CASH, 'Paid in cash')}${key(SCHED.SENT, 'Unpaid (click to open the invoice)')}${key(SCHED.upcoming, 'Upcoming')}${key(SCHED.pot, 'Receives the pot')}</div></div>`;
 }
 
 function viewSetup() {
@@ -107,6 +127,8 @@ function viewSetup() {
         <option value="rosca">Rotating pot: one member takes the whole pot each cycle</option>
         <option value="table">Table banking: members save, borrow from the fund, then share it out</option></select></div>
       <div><label>Table banking only: meetings before the share-out</label><input id="c-term" type="number" min="1" value="3"></div></div>
+    <div class="row"><div><label>Rotating pot only: first cycle starts</label><input id="c-start" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
+      <div><label>Rotating pot only: days per cycle</label><input id="c-days" type="number" min="1" value="30"></div></div>
     <p class="muted">In table banking, members can borrow up to three times their savings at 10% interest, repaid at the next meeting. The interest is shared out with the savings at the end.</p>
     <label>Members, in payout order (use the email addresses of your PayPal sandbox personal accounts)</label>
     <div id="members">${rows}</div>
@@ -197,7 +219,7 @@ function viewCircle() {
   const pot = c.contribution * c.members.length;
   let top;
   if (!cy || !collecting) {
-    const next = c.members[c.cycles.length % c.members.length];
+    const next = member(c.payoutOrder[c.cycles.length % c.members.length]);
     top = `<div class="card"><h2>${esc(c.name)}</h2>
       <p>${c.members.length} members, ${fmt(c.contribution)} each per cycle, pot of ${fmt(pot)}.</p>
       <p>Next pot goes to <b>${esc(next.name)}</b>.</p>
@@ -228,7 +250,7 @@ function viewCircle() {
   const history = c.cycles.filter((x) => x.status === 'paid_out').reverse().map((x) => `<div style="padding:10px 0;border-top:1px solid var(--line)">
       <b>Cycle ${x.n}</b>: ${fmt(x.payout.amount)} paid to ${esc(member(x.recipientId).name)} <span class="chip ok">PayPal payout ${esc(x.payout.status)}</span>
       <div class="muted">Batch ${esc(x.payout.batchId)}</div><div class="summary">${esc(x.summary || '')}</div></div>`).join('');
-  return top + askCard() + `
+  return top + scheduleCard() + askCard() + `
     <div class="card"><div class="row tight" style="justify-content:space-between"><h2 style="margin:0">Payout history</h2>
       <button class="small" onclick="run(this, () => api('POST','/api/payout/refresh'))">Refresh payout status</button></div>
       ${history || '<p class="muted">No pots paid out yet.</p>'}</div>` + resetLine();
@@ -267,7 +289,7 @@ async function declineLoan(btn, id, reason) { await run(btn, async () => { await
 async function shareOut(btn) { await run(btn, async () => { await api('POST', '/api/shareout'); plan = null; }); }
 async function createCircle(btn) {
   const members = [...document.querySelectorAll('#members .row')].map((r) => ({ name: $('.m-name', r).value.trim(), email: $('.m-email', r).value.trim(), onTime: $('.m-on', r).value, late: $('.m-late', r).value })).filter((m) => m.name || m.email);
-  await run(btn, () => api('POST', '/api/circle', { name: $('#c-name').value.trim(), contribution: Number($('#c-amt').value), type: $('#c-type').value, termMeetings: Number($('#c-term').value), members }));
+  await run(btn, () => api('POST', '/api/circle', { name: $('#c-name').value.trim(), contribution: Number($('#c-amt').value), type: $('#c-type').value, termMeetings: Number($('#c-term').value), startDate: $('#c-start').value, cycleDays: Number($('#c-days').value), members }));
 }
 async function runAgent(btn) { await run(btn, async () => { plan = null; plan = await api('POST', '/api/agent/run'); }); }
 async function approveRemind(btn, i) { const a = plan.actions[i]; await run(btn, async () => { await api('POST', '/api/actions/remind', { memberId: a.memberId, subject: $('#sub' + i).value, note: $('#note' + i).value }); plan.actions.splice(i, 1); }); }
@@ -275,6 +297,108 @@ async function approvePayout(btn) { await run(btn, async () => { await api('POST
 function dismiss(i) { plan.actions.splice(i, 1); render(); }
 async function ask(btn) { const question = $('#q').value; await run(btn, async () => { answer = (await api('POST', '/api/ask', { question })).answer; }); }
 load().catch((e) => showErr(e.message));
+</script>
+<script type="module">
+// Rotation schedule panel, built with Bryntum Scheduler. The page script above calls window.mountSchedule() after every render.
+import { Scheduler } from '/vendor/bryntum/scheduler.module.js';
+
+let scheduler = null;
+const day = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const shortDate = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+window.mountSchedule = () => {
+  if (scheduler) { scheduler.destroy(); scheduler = null; }
+  const el = document.querySelector('#sched'), sc = S && S.schedule;
+  if (!el || !sc) return;
+  const c = S.circle, pot = c.contribution * c.members.length;
+  const t0 = day(sc.startDate).getTime(), span = sc.cycleDays * 86400000;
+  const cycleAt = (date) => sc.cycles[Math.round((date.getTime() - t0) / span)];
+
+  // What each event means is kept here, keyed by event id, rather than on the Bryntum records.
+  const meta = new Map(), events = [];
+  for (const x of sc.cycles) {
+    const cy = c.cycles[x.n - 1];
+    for (const m of c.members) {
+      const con = cy && cy.contributions.find((k) => k.memberId === m.id);
+      const state = con ? con.status : 'upcoming';
+      const label = { PAID: 'Paid via PayPal', CASH: 'Paid in cash', SENT: 'Unpaid', upcoming: 'Upcoming' }[state];
+      const id = `c-${x.n}-${m.id}`;
+      events.push({ id, resourceId: m.id, startDate: day(x.start), endDate: day(x.end), name: `${fmt(c.contribution)} · ${label}`,
+        eventColor: SCHED[state], draggable: false, resizable: false, cls: con && con.payUrl ? 'k-link' : '' });
+      meta.set(id, { kind: 'contribution', payUrl: con && con.payUrl });
+    }
+    const paidOut = x.status === 'paid_out', id = `p-${x.n}`;
+    events.push({ id, resourceId: x.recipientId, startDate: day(x.start), endDate: day(x.end),
+      name: paidOut ? `Received ${fmt(pot)} · PayPal batch ${x.batchId}` : `Receives the pot: ${fmt(pot)}`,
+      eventColor: SCHED.pot, iconCls: 'fa-solid fa-sack-dollar', draggable: !x.started, resizable: false });
+    meta.set(id, { kind: 'pot', position: x.position, started: x.started });
+  }
+
+  // Where a dragged turn would land, and whether that is allowed. The server checks again on drop.
+  const landing = (record, startDate, resourceId) => {
+    const from = meta.get(record.id), to = cycleAt(startDate);
+    if (!from || from.kind !== 'pot' || from.started) return { message: 'Only future turns can be moved' };
+    if (!to) return { message: 'That is outside this rotation' };
+    if (to.started) return { message: `Cycle ${to.n} has already started` };
+    const rowChanged = resourceId !== sc.cycles[from.position].recipientId, cycleChanged = to.position !== from.position;
+    if (rowChanged && cycleChanged) return { message: 'Move along the row to change the cycle, or straight up or down to give this turn to another member' };
+    if (!rowChanged && !cycleChanged) return { same: true };
+    // Either way it is a swap of two positions in the payout order.
+    const other = rowChanged ? c.payoutOrder.indexOf(resourceId) : to.position;
+    if (sc.cycles[other].started) return { message: `${member(resourceId).name} has already had a turn in this rotation` };
+    const order = c.payoutOrder.slice();
+    [order[from.position], order[other]] = [order[other], order[from.position]];
+    return { order };
+  };
+
+  scheduler = new Scheduler({
+    appendTo: el,
+    autoHeight: true,
+    startDate: day(sc.startDate),
+    endDate: day(sc.endDate),
+    viewPreset: {
+      tickWidth: 150,
+      timeResolution: { unit: 'day', increment: 1 },
+      headers: [{ unit: 'day', increment: sc.cycleDays, align: 'center',
+        renderer: (start, end, cfg, i) => (sc.cycles[i] ? `Cycle ${sc.cycles[i].n} · from ${shortDate(start)}` : '') }],
+    },
+    forceFit: el.clientWidth >= 760, // on a phone the timeline scrolls inside the panel instead of squeezing
+    rowHeight: 46,
+    barMargin: 5,
+    eventLayout: 'stack',
+    zoomOnMouseWheel: false,
+    zoomOnTimeAxisDoubleClick: false,
+    enableEventAnimations: false,
+    columns: [{ text: 'Member', field: 'name', width: el.clientWidth >= 760 ? 150 : 110, sortable: false, draggable: false }],
+    resources: c.members.map((m) => ({ id: m.id, name: m.name })),
+    events,
+    features: {
+      eventDrag: {
+        constrainDragToTimeSlot: false,
+        validatorFn({ startDate, eventRecords, newResource }) {
+          const r = landing(eventRecords[0], startDate, newResource.id);
+          return r.message ? { valid: false, message: r.message } : true;
+        },
+      },
+      eventResize: false, eventEdit: false, eventDragCreate: false, eventMenu: false, scheduleMenu: false,
+      timeAxisHeaderMenu: false, cellEdit: false, cellMenu: false, headerMenu: false, eventTooltip: false, sort: false,
+    },
+    listeners: {
+      eventClick({ eventRecord }) {
+        const m = meta.get(eventRecord.id);
+        if (m && m.payUrl) window.open(m.payUrl, '_blank', 'noopener');
+      },
+      async eventDrop({ eventRecords, context }) {
+        const rec = eventRecords[0];
+        const r = landing(rec, rec.startDate, context && context.newResource ? context.newResource.id : rec.resourceId);
+        showErr(r.message || '');
+        if (r.order) { try { await api('PUT', '/api/circle/order', { payoutOrder: r.order }); } catch (e) { showErr(e.message); } }
+        await load(); // redraws from the server's state, which also undoes a rejected drag
+      },
+    },
+  });
+};
+window.mountSchedule();
 </script>
 </body>
 </html>

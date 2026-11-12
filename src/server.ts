@@ -28,6 +28,8 @@ type ShareOut = { batchId: string; status: string; at: string; total: number; it
 type Circle = {
   name: string; currency: string; contribution: number; members: Member[]; cycles: Cycle[];
   type?: 'rosca' | 'table'; termMeetings?: number; loans?: Loan[]; shareOut?: ShareOut; shareOutFailed?: number;
+  // Rotation schedule: when cycle 1 starts, how long a cycle lasts, and who receives the pot in which position.
+  startDate?: string; cycleDays?: number; payoutOrder?: string[];
 };
 type Db = { circle: Circle | null };
 
@@ -36,9 +38,21 @@ const LOAN_INTEREST = 0.1; // flat, repaid in full at the next meeting
 const LOAN_LIMIT_MULTIPLE = 3; // a member can borrow up to three times their own savings
 
 const store = makeStore<Db>(process.env.KITTY_DB || 'data/db.json', { circle: null });
+// Circles saved before the rotation schedule existed load with sensible defaults.
+function fillDefaults(c: Circle) {
+  const ids = c.members.map((m) => m.id);
+  c.startDate ||= (c.cycles[0]?.startedAt || new Date().toISOString()).slice(0, 10);
+  c.cycleDays = Math.max(1, Math.floor(Number(c.cycleDays)) || 30);
+  if (!Array.isArray(c.payoutOrder) || c.payoutOrder.length !== ids.length || !ids.every((id) => c.payoutOrder!.includes(id))) c.payoutOrder = ids;
+  return c;
+}
+{ const loaded = store.get().circle; if (loaded) fillDefaults(loaded); }
+
 const app = express();
 app.use(express.json());
 app.use(express.static('public'));
+// Bryntum Scheduler (trial) is served straight from node_modules: there is no bundler in this project.
+app.use('/vendor/bryntum', express.static('node_modules/@bryntum/scheduler'));
 
 const wrap = (fn: express.RequestHandler): express.RequestHandler => (req, res, next) =>
   Promise.resolve().then(() => fn(req, res, next)).catch((e) => res.status(400).json({ error: e.message }));
@@ -64,6 +78,29 @@ const nameOf = (c: Circle, id: string) => c.members.find((m) => m.id === id)?.na
 const keyBase = (c: Circle) => `kitty-${c.name.replace(/\W/g, '').slice(0, 12)}`;
 const stamp = (iso: string) => iso.replace(/\D/g, '').slice(0, 14);
 const cash = (c: Circle, n: number) => `${n.toFixed(2)} ${c.currency}`;
+
+// ---------- Rotating pot: the payout order and the projected schedule ----------
+const recipientOf = (c: Circle, n: number) => c.payoutOrder![(n - 1) % c.members.length];
+// One full rotation: the one containing the cycle in progress, or the next cycle to start if none is.
+function schedule(c: Circle) {
+  const len = c.members.length;
+  const focus = current(c)?.status === 'collecting' ? c.cycles.length : c.cycles.length + 1;
+  const r = Math.floor((focus - 1) / len);
+  const t0 = Date.parse(c.startDate + 'T00:00:00Z'); const span = c.cycleDays! * 86400000;
+  const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
+  return {
+    rotation: r + 1, startDate: iso(t0 + r * len * span), endDate: iso(t0 + (r + 1) * len * span), cycleDays: c.cycleDays!,
+    cycles: Array.from({ length: len }, (_, p) => {
+      const n = r * len + p + 1; const cy = c.cycles[n - 1] as Cycle | undefined;
+      return {
+        n, position: p, start: iso(t0 + (n - 1) * span), end: iso(t0 + n * span),
+        started: !!cy, status: cy ? cy.status : 'upcoming',
+        recipientId: cy ? cy.recipientId : c.payoutOrder![p],
+        batchId: cy?.payout?.batchId, payoutStatus: cy?.payout?.status,
+      };
+    }),
+  };
+}
 
 // ---------- Table banking: the fund and its rules ----------
 // Everything is derived from paid invoices and loan states, so the ledger cannot drift from PayPal's record.
@@ -108,22 +145,38 @@ app.get('/api/state', (_req, res) => {
     shareOutBlocked: shareOutBlock(c),
     loanBlocks: Object.fromEntries((c.loans || []).filter((l) => l.status === 'requested').map((l) => [l.id, loanBlock(c, l)])),
   } : null;
-  res.json({ circle: c, table, mock: MOCK, ai: aiInfo() });
+  res.json({ circle: c, table, schedule: c && !isTable(c) ? schedule(c) : null, mock: MOCK, ai: aiInfo() });
 });
 
 app.post('/api/circle', wrap((req, res) => {
-  const { name, currency = 'USD', contribution, members, type = 'rosca', termMeetings } = req.body;
+  const { name, currency = 'USD', contribution, members, type = 'rosca', termMeetings, startDate, cycleDays } = req.body;
+  if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw new Error('The start date must look like 2026-11-12.');
   if (!name || !(contribution > 0) || !Array.isArray(members) || members.length < 2)
     throw new Error('A circle needs a name, a contribution amount and at least two members.');
   for (const m of members) if (!m.name || !/^\S+@\S+\.\S+$/.test(m.email || '')) throw new Error('Every member needs a name and a valid PayPal email.');
   if (type !== 'rosca' && type !== 'table') throw new Error('Unknown group type.');
   store.set({
-    circle: {
+    circle: fillDefaults({
       name, currency, contribution: Number(contribution), cycles: [], type,
       ...(type === 'table' ? { termMeetings: Math.max(1, Math.floor(Number(termMeetings)) || 3), loans: [] } : {}),
+      ...(startDate ? { startDate } : {}), cycleDays,
       members: members.map((m: any) => ({ id: randomUUID().slice(0, 8), name: m.name, email: m.email, onTime: Number(m.onTime) || 0, late: Number(m.late) || 0 })),
-    },
+    }),
   });
+  res.json({ ok: true });
+}));
+
+// The treasurer changed who receives the pot in which cycle. Only turns that have not started can move.
+app.put('/api/circle/order', wrap((req, res) => {
+  const c = circle();
+  if (isTable(c)) throw new Error('A table banking group has no payout order.');
+  const next = req.body.payoutOrder; const ids = c.members.map((m) => m.id);
+  if (!Array.isArray(next) || next.length !== ids.length || !ids.every((id) => next.includes(id)))
+    throw new Error('The payout order must list every member exactly once.');
+  for (const x of schedule(c).cycles)
+    if (x.started && next[x.position] !== c.payoutOrder![x.position])
+      throw new Error(`Cycle ${x.n} has already started, so its recipient cannot change.`);
+  c.payoutOrder = next.map(String); store.save();
   res.json({ ok: true });
 }));
 
@@ -143,7 +196,7 @@ app.post('/api/cycles/start', wrap(async (_req, res) => {
   }
   if (!cur || cur.status !== 'collecting') {
     const n = c.cycles.length + 1;
-    cur = { n, recipientId: table ? '' : c.members[(n - 1) % c.members.length].id, startedAt: new Date().toISOString(), status: 'collecting', contributions: [] };
+    cur = { n, recipientId: table ? '' : recipientOf(c, n), startedAt: new Date().toISOString(), status: 'collecting', contributions: [] };
     c.cycles.push(cur);
     store.save();
   }
@@ -221,6 +274,10 @@ function snapshot(c: Circle) {
     pastCycles: c.cycles.filter((x) => x.status === 'paid_out').map((x) => ({
       number: x.n, potWentTo: c.members.find((m) => m.id === x.recipientId)!.name, amount: x.payout?.amount,
     })),
+    // The projected rotation, so questions like "When does Priya get the pot?" can be answered. Only the treasurer can change the order.
+    cycleLengthDays: c.cycleDays,
+    payoutOrder: c.payoutOrder!.map((id) => nameOf(c, id)),
+    rotationSchedule: schedule(c).cycles.map((x) => ({ cycle: x.n, starts: x.start, ends: x.end, potGoesTo: nameOf(c, x.recipientId), status: x.status })),
   };
 }
 function snapshotTable(c: Circle) {
@@ -352,7 +409,7 @@ app.post('/api/actions/payout', wrap(async (_req, res) => {
   cy.payout = { ...p, amount, at: new Date().toISOString() };
   cy.status = 'paid_out'; store.save();
   try {
-    cy.summary = await chat(TREASURER, `Cycle ${cy.n} has just been paid out. Write a warm 3-4 sentence summary for the members' group chat: who received the pot and how much, a thank-you, and who receives the next pot (${c.members[cy.n % c.members.length].name}). Do not single out anyone who paid late. Plain text only.
+    cy.summary = await chat(TREASURER, `Cycle ${cy.n} has just been paid out. Write a warm 3-4 sentence summary for the members' group chat: who received the pot and how much, a thank-you, and who receives the next pot (${nameOf(c, recipientOf(c, cy.n + 1))}). Do not single out anyone who paid late. Plain text only.
 
 State: ${JSON.stringify(snapshot(c))}`, 1200);
     store.save();

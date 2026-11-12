@@ -4,7 +4,9 @@
   "description": "Kitty: an AI treasurer for savings circles, built on PayPal Invoicing and Payouts",
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
@@ -12,6 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@bryntum/scheduler": "npm:@bryntum/scheduler-trial@^7.3.8",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "tsx": "^4.19.2"

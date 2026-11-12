@@ -32,6 +32,25 @@ Kitty runs either model; you choose when you create the group.
 
 The rules are fixed in code: 10% flat interest, repaid in full at the next meeting; a loan limit of three times the borrower's own savings and never more than the cash in the fund; one loan per member at a time; no share-out while a loan is outstanding. The server enforces them whatever the AI recommends.
 
+## Rotation schedule (Bryntum Scheduler)
+
+For a rotating pot, the dashboard shows a **Rotation schedule** panel built with [Bryntum Scheduler](https://bryntum.com/products/scheduler/). It has one row per member and one column per cycle, for one full rotation.
+
+- Each member has a contribution bar per cycle, coloured by state: paid via PayPal, paid in cash, unpaid or upcoming. Clicking a bar with an invoice opens the PayPal invoice.
+- The recipient's row carries a "receives the pot" bar with the pot amount, and the PayPal payout batch id once it is paid out.
+- The treasurer changes the payout order by dragging a future turn: along its row to move it to another cycle, or up or down to give that turn to another member. Either way two turns swap. Cycles that have started cannot change, and the server refuses any order that would change them.
+- The schedule is also in the data the AI sees, so "When does Priya get the pot?" works in Ask Kitty. The AI cannot change the order.
+
+Bryntum Scheduler is installed from the public trial package:
+
+```bash
+npm install @bryntum/scheduler@npm:@bryntum/scheduler-trial
+```
+
+There is no bundler. Express serves `node_modules/@bryntum/scheduler` at `/vendor/bryntum`, and `public/index.html` loads `scheduler.module.js`, `scheduler.css`, the `svalbard-light.css` theme and the bundled FontAwesome CSS from there.
+
+Trial note: the trial runs for 45 days from the first time a browser opens the page (it keeps the start time in that browser's local storage). After that the panel shows "Trial expired" and stays empty; the rest of Kitty keeps working. A licensed build removes the limit.
+
 ## How PayPal is used
 
 | PayPal API | Used for |
@@ -86,7 +105,7 @@ src/server.ts   API and the treasurer agent
 src/paypal.ts   PayPal sandbox client (Invoicing, Payouts)
 src/ai.ts       Provider-agnostic AI client
 src/store.ts    JSON-file storage
-public/         Single-page dashboard
+public/         Single-page dashboard, including the Bryntum rotation schedule
 ```
 
 ## Limitations
